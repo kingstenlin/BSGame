@@ -168,9 +168,11 @@ class BSEnv(AECEnv):
         # TODO: handle the retroactive reward for a successful or failed bluff
 
         self.num_moves += 1
-        self.truncations = {
-            agent: self.num_moves >= self.max_iter for agent in self.agents
-        }
+
+        if self.num_moves >= self.max_iter:
+            for agent in self.agents:
+                self.truncations[agent] = True
+                self.rewards[agent] = -1.0
 
         # observe the current state for all agents
         for i in self.agents:

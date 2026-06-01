@@ -469,7 +469,7 @@ if __name__ == "__main__":
         n_epochs            = 4,
         batch_size          = 256,
         episodes_per_update = 32,
-        max_iter            = 100_000,
+        max_iter            = 2000,
     )
     cProfile.run("trainer.train(total_episodes = 100_000,log_interval   = 200,save_interval  = 5_000,)", sort="cumtime")
     trainer.train(
