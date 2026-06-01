@@ -31,7 +31,7 @@ Coverage targets:
 # 14 Challenge
 # 15 Pass challenge
 
-import BSEnv
+import core.BSEnv as BSEnv
 from pettingzoo.test import api_test
 
 api_test(BSEnv.BSEnv(), num_cycles=1000)

@@ -11,14 +11,15 @@ Coverage targets:
     - Win condition detection (both paths)
     - Cross-cutting card count invariant
 """
-
+import sys
+sys.path.append("../")
 import pytest
-from GameState import (
+from core.GameState import (
     Card, Rank, Suit, Phase, Claim,
     GameState, PlayerState, observe
 )
-import Action
-from utils import *
+import core.Action as Action
+from core.utils import *
 
 # -----------------------------------------------------------------------
 # 1. Initialization

@@ -31,13 +31,13 @@ def initializeGame(player_ct, decks = 1, seed = 42):
             right += 1
             remainder -= 1
         hand = deck[left:right]
-        for i in range(1, len(hand)):
-            j = i
-            while j > 0 and rankToInd[hand[j - 1].rank] > rankToInd[hand[j].rank]:
-                temp = hand[j]
-                hand[j] = hand[j - 1]
-                hand[j - 1] = temp
-                j -= 1
+        for j in range(1, len(hand)):
+            k = j
+            while k > 0 and rankToInd[hand[k - 1].rank] > rankToInd[hand[k].rank]:
+                temp = hand[k]
+                hand[k] = hand[k - 1]
+                hand[k - 1] = temp
+                k -= 1
         player = GameState.PlayerState(id=i, hand=tuple(hand))
         players.append(player)
         left = right
@@ -91,7 +91,6 @@ def playCards(state:GameState.GameState, cards: tuple[GameState.Card, ...]):
     #simple removal will never unsort
     newPlayerState = utils.updateSinglePlayer(players=state.players, player_id=state.current_player, newHand=tuple(newHand))
 
-
     claim = GameState.Claim(rank=state.current_rank, quantity=len(cards))
 
     truth = True
@@ -102,15 +101,19 @@ def playCards(state:GameState.GameState, cards: tuple[GameState.Card, ...]):
             truth = False
         newPile = utils.insertCardPile(newPile, card)
 
-    return utils.updateState(state,
-                             players=newPlayerState,
-                             pile=newPile,
-                             current_player=(state.current_player + 1) % state.playerCount,
-                             current_phase = GameState.Phase.CHALLENGE,
-                             current_claim = claim,
-                             last_actor = state.current_player,
-                             last_truth = truth,
-                             turn_number = state.turn_number + 1)
+    return GameState.GameState(
+        players=newPlayerState,
+        pile=newPile,
+        current_player=(state.current_player + 1) % state.playerCount,
+        current_phase=GameState.Phase.CHALLENGE,
+        current_claim=claim,
+        current_rank=state.current_rank,
+        last_actor=state.current_player,
+        last_truth=truth,
+        prev_pile_size=0,
+        winner=state.winner,
+        turn_number = state.turn_number + 1,
+    )
 
 
 def challenge(state:GameState.GameState):
@@ -140,9 +143,11 @@ def challenge(state:GameState.GameState):
                 j += 1
 
         if j < len(state.pile):
-            newHand.append(state.pile[j:])
+            newHand = newHand + list(state.pile)[j:]
+
         if i < len(hand):
-            newHand.append(hand[i:])
+            newHand = newHand + list(hand)[i:]
+
 
         newPlayerState = utils.updateSinglePlayer(
             players=state.players,
@@ -164,9 +169,10 @@ def challenge(state:GameState.GameState):
                 j += 1
 
         if j < len(state.pile):
-            newHand.append(state.pile[j:])
+            newHand = newHand + list(state.pile)[j:]
         if i < len(hand):
-            newHand.append(hand[i:])
+            newHand = newHand + list(hand)[i:]
+
         newPlayerState = utils.updateSinglePlayer(
             players=state.players,
             player_id=state.last_actor,

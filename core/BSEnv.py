@@ -172,7 +172,7 @@ class BSEnv(AECEnv):
         if self.num_moves >= self.max_iter:
             for agent in self.agents:
                 self.truncations[agent] = True
-                self.rewards[agent] = -1.0
+                # TODO: consider truncation penalty?
 
         # observe the current state for all agents
         for i in self.agents:
@@ -188,9 +188,11 @@ class BSEnv(AECEnv):
             for agent in self.agents
         }
 
+        self._accumulate_rewards()
+
         #update agent selector
         self.agent_selection = self.state.current_player
-        self._accumulate_rewards()
+
 
 
     def observe(self, agent):
@@ -241,7 +243,7 @@ class BSEnv(AECEnv):
         presume this is only called legitimately
         """
         # recall hand is sorted
-        hand = list(self.state.players[self.state.current_player].hand)
+        hand = self.state.players[self.state.current_player].hand
         # now just need to pivot around current rank
         i = 0
         while i < len(hand):
@@ -281,11 +283,12 @@ class BSEnv(AECEnv):
         # reward getting cards out
         # penalize a false challenge (picking up cards)
         # not do anything on pass
-        #self.rewards[acting_player] += a[action]
+        self.rewards[acting_player] += a[action]
         if action == 14:
-            #self.rewards[self.state.last_actor] += w * -self.state.prev_pile_size * (1 - self.state.last_truth)
-            self.rewards[acting_player] += 0
+            self.rewards[self.state.last_actor] += w * -self.state.prev_pile_size * (1 - self.state.last_truth)
             # penalized getting bluff called
+        # for i in self.agents:
+        #     self.rewards[i] += -self.state.turn_number * 0.001
         return
 
 
