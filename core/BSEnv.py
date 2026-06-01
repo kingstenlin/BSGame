@@ -143,9 +143,9 @@ class BSEnv(AECEnv):
             # the next dead agent,  or if there are no more dead agents, to the next live agent
             self._was_dead_step(action)
             return
-        #reset rewards
-        self._clear_rewards()
         agent = self.agent_selection
+        # reset rewards
+        self._clear_rewards()
 
 
         # stores action of current agent
@@ -190,7 +190,6 @@ class BSEnv(AECEnv):
 
         #update agent selector
         self.agent_selection = self.state.current_player
-        self._cumulative_rewards[agent] = 0
         self._accumulate_rewards()
 
 
@@ -276,16 +275,16 @@ class BSEnv(AECEnv):
         Return scalar reward for acting_player.
         """
 
-        reward = 0
         w = 0.02
         a = w * np.array([1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, -self.state.prev_pile_size * self.state.last_truth, 0])
         #vectorized way to:
         # reward getting cards out
         # penalize a false challenge (picking up cards)
         # not do anything on pass
-        self.rewards[acting_player] += a[action]
+        #self.rewards[acting_player] += a[action]
         if action == 14:
-            self.rewards[self.state.last_actor] += w * -self.state.prev_pile_size * (1 - self.state.last_truth)
+            #self.rewards[self.state.last_actor] += w * -self.state.prev_pile_size * (1 - self.state.last_truth)
+            self.rewards[acting_player] += 0
             # penalized getting bluff called
         return
 
@@ -311,8 +310,8 @@ class BSEnv(AECEnv):
         playerObs = GameState.observe(self.state, agent)
         # rank counts
         #TODO: optimize this. all the time is here
-        #for card in playerObs.player_hand:
-        #    vectorObs[rankToInd[card.rank]] += 0.25
+        for card in playerObs.player_hand:
+            vectorObs[rankToInd[card.rank]] += 0.25
 
         # note the transformation to maintain [0, 1]
         vectorObs[13] = rankToCyclicalSin[playerObs.current_rank]
