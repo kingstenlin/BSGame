@@ -1,5 +1,14 @@
 import core.GameState as GameState
 from typing import Optional
+
+rankToInd = {GameState.Rank.ACE : 0, GameState.Rank.TWO : 1,
+                     GameState.Rank.THREE : 2, GameState.Rank.FOUR : 3,
+                     GameState.Rank.FIVE : 4, GameState.Rank.SIX : 5,
+                     GameState.Rank.SEVEN : 6, GameState.Rank.EIGHT : 7,
+                     GameState.Rank.NINE : 8, GameState.Rank.TEN : 9,
+                     GameState.Rank.JACK : 10, GameState.Rank.QUEEN : 11,
+                     GameState.Rank.KING : 12}
+
 def updateSinglePlayer(players: tuple[GameState.PlayerState, ...],
                        player_id: int,
                        newHand: tuple[GameState.Card, ...]) -> tuple[GameState.PlayerState, ...]:
@@ -84,3 +93,13 @@ def assert_card_count_invariant(state: GameState, expected: int = 52):
     assert total_cards(state) == expected, (
         f"Card count violation: expected {expected}, got {total_cards(state)}"
     )
+
+def insertCardPile(pile: tuple[GameState.Card, ...], card:GameState.Card) -> tuple[GameState.Card, ...]:
+    newPile = list(pile)
+    # check for truth. also insert ordered into pile
+    for i in range(len(newPile)):
+        if rankToInd[newPile[len(newPile) - i - 1].rank] <= rankToInd[card.rank]:
+            newPile.insert(len(newPile) - i, card)
+            return tuple(newPile)
+    newPile.insert(0, card)
+    return tuple(newPile)

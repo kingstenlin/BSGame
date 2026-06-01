@@ -20,6 +20,10 @@ rankToInd = {GameState.Rank.ACE : 0, GameState.Rank.TWO : 1,
                      GameState.Rank.JACK : 10, GameState.Rank.QUEEN : 11,
                      GameState.Rank.KING : 12}
 
+rankToCyclicalSin = {r : np.sin(2 * np.pi * rankToInd[r] / 13) / 2 + 0.5
+                  for r in list(GameState.Rank.__members__.values())}
+rankToCyclicalCos = {r : np.cos(2 * np.pi * rankToInd[r] / 13) / 2 + 0.5
+                  for r in list(GameState.Rank.__members__.values())}
 # Observation vector layout:
 # [0:13]: counts of each rank, normalized by 4
 # [13, 14]: cyclic encoding of current rank
@@ -57,7 +61,7 @@ declareActions = [
 NUM_ACTIONS = 16
 
 class BSEnv(AECEnv):
-    metadata = {"render_modes" : ["human"], "name" : "BS_v1", "is_parallelizable" : True}
+    metadata = {"render_modes" : ["human"], "name" : "BS_v1"}
 
     def __init__(self, renderMode = None, max_iter = 100000):
         super().__init__()
@@ -107,7 +111,6 @@ class BSEnv(AECEnv):
         self._cumulative_rewards = {agent: 0 for agent in self.agents}
         self.terminations = {agent: False for agent in self.agents}
         self.truncations = {agent: False for agent in self.agents}
-        self.infos = {agent: {} for agent in self.agents}
         self.state = Action.initializeGame(player_ct=NUM_PLAYERS, seed=game_seed)
         self.observations = {agent: self._get_obs(agent) for agent in self.agents}
         self.agent_selection = self.state.current_player
@@ -148,13 +151,19 @@ class BSEnv(AECEnv):
         # stores action of current agent
         self.state = self._apply_action(action)
 
-        # update terminations
+        # update terminations.
+        # this is also where all the win loss reward lives
         if self.state.winner is not None:
             for a in self.agents:
                 self.terminations[a] = True
+                if a == self.state.winner:
+                    self.rewards[a] = 1
+                else:
+                    self.rewards[a] = -0.5
+
 
         # handle the general reward for current agent
-        self.rewards[agent] = self._compute_reward(acting_player=agent, terminated=self.terminations[agent], action=action)
+        self._compute_reward(acting_player=agent, terminated=self.terminations[agent], action=action)
 
         # TODO: handle the retroactive reward for a successful or failed bluff
 
@@ -230,25 +239,24 @@ class BSEnv(AECEnv):
 
         presume this is only called legitimately
         """
-        # given an unsorted list
+        # recall hand is sorted
         hand = list(self.state.players[self.state.current_player].hand)
-        # insertion sort the list according to cyclical ranking
+        # now just need to pivot around current rank
+        i = 0
+        while i < len(hand):
+            if rankToInd[hand[i].rank] >= rankToInd[self.state.current_rank]:
+                break
+            i += 1
+        # ex 1 2 2 3 5 7 with curr rank 4 gives i = 4
         # work backwards from it to bluff
         # go forwards from it to play honestly
-        for i in range(1, len(hand)):
-            j = i
-            while j > 0 and self.relRank(hand[j - 1]) > self.relRank(hand[j]):
-                temp = hand[j]
-                hand[j] = hand[j - 1]
-                hand[j - 1] = temp
-                j -= 1
 
         toPlay = []
-        for i in range(honest):
-            toPlay.append(hand[i])
+        for j in range(honest):
+            toPlay.append(hand[i + j])
 
-        for i in range(quantity - honest):
-            toPlay.append(hand[-(i + 1)])
+        for j in range(quantity - honest):
+            toPlay.append(hand[(i - j - 1) % len(hand)])
 
         return tuple(toPlay)
 
@@ -259,34 +267,25 @@ class BSEnv(AECEnv):
         # potentially offer rewards for bluff success? must be added retroactively
         # maybe not needed though... perhaps bad bluff will propagate through hand size penalty
         # to be explored
-        return NotImplementedError
+        raise NotImplementedError
 
-    def _compute_reward(self, acting_player: int, terminated: bool, action: int) -> float:
+    def _compute_reward(self, acting_player: int, terminated: bool, action: int):
         """
         Return scalar reward for acting_player.
-
-        Suggested structure (fill in values after baseline experiments):
-            +1.0   game win
-            -1.0   game loss
-            +0.2   successful challenge
-            -0.2   failed challenge (you challenged, were wrong)
-            -0.01 * hand size
-            0.0    all other transitions
-
         """
-        reward = 0.0
-        if terminated: # victory condition
-            reward += 10 if (self.state.winner == acting_player) else -5
-            return reward
 
-        if self.state.current_phase == GameState.Phase.DECLARE: # just came out of challenge
-            # called bluff or let the truth go
-            # action - 15 -> 0 : challenge, 1 : pass
-            reward += 0.2 if (self.state.last_truth == action - 14) else -0.2
-
-        reward += -0.01 * len(self.state.getPlayerById(acting_player).hand)
-
-        return reward
+        reward = 0
+        w = 0.02
+        a = w * np.array([1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, -self.state.prev_pile_size * self.state.last_truth, 0])
+        #vectorized way to:
+        # reward getting cards out
+        # penalize a false challenge (picking up cards)
+        # not do anything on pass
+        self.rewards[acting_player] += a[action]
+        if action == 14:
+            self.rewards[self.state.last_actor] += w * -self.state.prev_pile_size * (1 - self.state.last_truth)
+            # penalized getting bluff called
+        return
 
 
     def _get_obs(self, agent) -> np.ndarray:
@@ -309,12 +308,13 @@ class BSEnv(AECEnv):
         vectorObs = np.zeros(OBS_DIM, np.float32)
         playerObs = GameState.observe(self.state, agent)
         # rank counts
-        for card in playerObs.player_hand:
-            vectorObs[rankToInd[card.rank]] += 0.25
+        #TODO: optimize this. all the time is here
+        #for card in playerObs.player_hand:
+        #    vectorObs[rankToInd[card.rank]] += 0.25
 
         # note the transformation to maintain [0, 1]
-        vectorObs[13] = np.sin(2 * np.pi * rankToInd[playerObs.current_rank] / 13) / 2 + 0.5
-        vectorObs[14] = np.cos(2 * np.pi * rankToInd[playerObs.current_rank] / 13) / 2 + 0.5
+        vectorObs[13] = rankToCyclicalSin[playerObs.current_rank]
+        vectorObs[14] = rankToCyclicalCos[playerObs.current_rank]
 
         vectorObs[15] = playerObs.pile_size / 52 / NUM_DECKS
 

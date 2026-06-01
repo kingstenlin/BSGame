@@ -2,6 +2,13 @@ import core.GameState as GameState
 import core.utils as utils
 import random
 
+rankToInd = {GameState.Rank.ACE : 0, GameState.Rank.TWO : 1,
+                     GameState.Rank.THREE : 2, GameState.Rank.FOUR : 3,
+                     GameState.Rank.FIVE : 4, GameState.Rank.SIX : 5,
+                     GameState.Rank.SEVEN : 6, GameState.Rank.EIGHT : 7,
+                     GameState.Rank.NINE : 8, GameState.Rank.TEN : 9,
+                     GameState.Rank.JACK : 10, GameState.Rank.QUEEN : 11,
+                     GameState.Rank.KING : 12}
 #TODO: support > 1 deck. dependencies are everywhere
 
 #these should all return GameStates
@@ -23,7 +30,15 @@ def initializeGame(player_ct, decks = 1, seed = 42):
         if remainder > 0:
             right += 1
             remainder -= 1
-        player = GameState.PlayerState(id=i, hand=tuple(deck[left:right]))
+        hand = deck[left:right]
+        for i in range(1, len(hand)):
+            j = i
+            while j > 0 and rankToInd[hand[j - 1].rank] > rankToInd[hand[j].rank]:
+                temp = hand[j]
+                hand[j] = hand[j - 1]
+                hand[j - 1] = temp
+                j -= 1
+        player = GameState.PlayerState(id=i, hand=tuple(hand))
         players.append(player)
         left = right
         right += cards_per
@@ -73,20 +88,23 @@ def playCards(state:GameState.GameState, cards: tuple[GameState.Card, ...]):
 
     if c != len(cards):
         raise Exception("Cards failed to play: invalid selection")
-
+    #simple removal will never unsort
     newPlayerState = utils.updateSinglePlayer(players=state.players, player_id=state.current_player, newHand=tuple(newHand))
 
 
     claim = GameState.Claim(rank=state.current_rank, quantity=len(cards))
 
-    #record if the claim was true
     truth = True
+    newPile = state.pile
+    # check for truth. also insert ordered into pile
     for card in cards:
         if card.rank != state.current_rank:
             truth = False
+        newPile = utils.insertCardPile(newPile, card)
+
     return utils.updateState(state,
                              players=newPlayerState,
-                             pile=state.pile + tuple(cards),
+                             pile=newPile,
                              current_player=(state.current_player + 1) % state.playerCount,
                              current_phase = GameState.Phase.CHALLENGE,
                              current_claim = claim,
@@ -109,17 +127,50 @@ def challenge(state:GameState.GameState):
             return utils.updateState(state, winner=prev)
 
         #challenger takes pile!
+        hand = state.getPlayerById(state.current_player).hand
+        i = 0
+        j = 0
+        newHand = []
+        while i < len(hand) and j < len(state.pile):
+            if rankToInd[hand[i].rank] < rankToInd[state.pile[j].rank]:
+                newHand.append(hand[i])
+                i += 1
+            else:
+                newHand.append(state.pile[j])
+                j += 1
+
+        if j < len(state.pile):
+            newHand.append(state.pile[j:])
+        if i < len(hand):
+            newHand.append(hand[i:])
+
         newPlayerState = utils.updateSinglePlayer(
             players=state.players,
             player_id=state.current_player,
-            newHand=state.getPlayerById(state.current_player).hand + state.pile)
+            newHand=tuple(newHand))
         newId = (state.current_player + 1) % state.playerCount
     else:
         #liar takes pile!
+        hand = state.getPlayerById(state.last_actor).hand
+        i = 0
+        j = 0
+        newHand = []
+        while i < len(hand) and j < len(state.pile):
+            if rankToInd[hand[i].rank] < rankToInd[state.pile[j].rank]:
+                newHand.append(hand[i])
+                i += 1
+            else:
+                newHand.append(state.pile[j])
+                j += 1
+
+        if j < len(state.pile):
+            newHand.append(state.pile[j:])
+        if i < len(hand):
+            newHand.append(hand[i:])
         newPlayerState = utils.updateSinglePlayer(
             players=state.players,
             player_id=state.last_actor,
-            newHand=state.getPlayerById(state.last_actor).hand + state.pile)
+            newHand=tuple(newHand))
         newId = (state.last_actor + 1) % state.playerCount
 
 
@@ -132,6 +183,7 @@ def challenge(state:GameState.GameState):
         current_rank=state.current_rank.next(), #todo: optional rank reset
         last_actor=state.last_actor,  # maintain for reward calculating
         last_truth=state.last_truth,
+        prev_pile_size=len(state.pile),
         winner=state.winner,
         turn_number = state.turn_number + 1,
     )
@@ -150,6 +202,7 @@ def passChallenge(state:GameState.GameState):
         current_rank=state.current_rank.next(),
         last_actor=state.last_actor, # maintain for reward calculating
         last_truth=state.last_truth,
+        prev_pile_size=len(state.pile),
         winner=state.winner,
         turn_number=state.turn_number + 1,
     )

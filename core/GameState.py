@@ -44,6 +44,14 @@ cardDict = {Rank.ACE : "A", Rank.TWO : "2", Rank.THREE : "3", Rank.FOUR : "4",
             Rank.KING : "K", Suit.HEARTS : "H", Suit.DIAMONDS : "D", Suit.SPADES : "S",
             Suit.CLUBS : "C"}
 
+rankToInd = {Rank.ACE : 0, Rank.TWO : 1,
+                     Rank.THREE : 2, Rank.FOUR : 3,
+                     Rank.FIVE : 4, Rank.SIX : 5,
+                     Rank.SEVEN : 6, Rank.EIGHT : 7,
+                     Rank.NINE : 8, Rank.TEN : 9,
+                     Rank.JACK : 10, Rank.QUEEN : 11,
+                     Rank.KING : 12}
+
 class Phase(Enum):
     DECLARE = auto()
     CHALLENGE = auto()
@@ -72,16 +80,18 @@ class GameState:
     """
     land of dreams. 10 attributes
     """
-    players: tuple[PlayerState, ...]
-    pile: tuple[Card, ...]
+    players: tuple[PlayerState, ...] # let them be sorted now
+    pile: tuple[Card, ...] # also maintain sorted
     current_player: int
     current_phase: Phase
     current_claim: Optional[Claim] = None
     current_rank: Optional[Rank] = Rank.ACE
     last_actor: Optional[int] = None
     last_truth: Optional[bool] = None #was the last claim true?
+    prev_pile_size: Optional[int] = 0
     winner: Optional[int] = None
     turn_number: int = 0
+
 
     @property
     def playerCount(self) -> int:
