@@ -1,3 +1,78 @@
+"""
+train.py — Self-play PPO trainer for BSEnv with opponent pool.
+
+Opponent pool
+─────────────
+Each episode assigns an agent to each of the 3 seats. The distribution
+across all seat-assignments targets ~50/40/10:
+
+    50%  current policy      (trainable — transitions buffered)
+    40%  past checkpoint     (frozen copy of an earlier policy snapshot)
+    10%  naive agent         (rule-based: Random, Conservative, Aggressive,
+                              or Threshold — sampled uniformly)
+
+Implementation:
+  - Each seat is sampled independently from the distribution above.
+  - If no seat received the current policy (probability 0.5³ = 12.5%),
+    one seat is re-assigned to current policy to guarantee training data
+    every episode.
+  - The checkpoint pool is initially empty; fallback to current policy
+    until the first snapshot is taken (every POOL_ADD_INTERVAL updates).
+
+Only transitions from current-policy seats are added to the training
+buffer. Past-checkpoint and naive-agent seats act normally (keeping the
+game valid) but their transitions are discarded.
+
+AEC reward offset
+─────────────────
+env.last() returns cumulative reward since the agent LAST acted.
+Transitions are buffered and flushed with their reward on the agent's
+following turn (or when processed as dead). See collect_episode for detail.
+"""
+
+from __future__ import annotations
+
+import copy
+import os
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+from core.BSEnv import BSEnv, NUM_ACTIONS, NUM_PLAYERS, OBS_DIM
+from agents import (
+    Agent, PolicyAgent, make_naive_agents,
+    RandomAgent, ConservativeAgent, AggressiveAgent, ThresholdAgent,
+)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Hyperparameters
+# ────────────────────────────────────────────────────────────────────────────
+
+# Opponent pool
+POOL_ADD_INTERVAL  = 10    # add snapshot to pool every N updates
+POOL_MAX_SIZE      = 30    # evict oldest when pool exceeds this
+
+# Seat-assignment probabilities (must sum to 1.0)
+P_CURRENT    = 0.50
+P_CHECKPOINT = 0.20
+P_NAIVE      = 0.30
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Policy network
+# ────────────────────────────────────────────────────────────────────────────
+
+class BSPolicy(nn.Module):
+    """
+    Shared actor-critic network. Tanh activations, orthogonal init.
+    """
 
     def __init__(self, obs_dim: int, action_dim: int, hidden_dim: int = 128):
         super().__init__()
