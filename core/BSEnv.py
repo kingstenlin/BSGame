@@ -170,8 +170,8 @@ class BSEnv(AECEnv):
         self.num_moves += 1
 
         if self.num_moves >= self.max_iter:
-            for agent in self.agents:
-                self.truncations[agent] = True
+            for a in self.agents:
+                self.truncations[a] = True
                 # TODO: consider truncation penalty?
 
         # observe the current state for all agents
@@ -283,9 +283,9 @@ class BSEnv(AECEnv):
         # reward getting cards out
         # penalize a false challenge (picking up cards)
         # not do anything on pass
-        self.rewards[acting_player] += a[action]
+        # self.rewards[acting_player] += a[action]
         if action == 14:
-            self.rewards[self.state.last_actor] += w * -self.state.prev_pile_size * (1 - self.state.last_truth)
+            self.rewards[acting_player] += 0.001 * (1 - 2 * self.state.last_truth)
             # penalized getting bluff called
         # for i in self.agents:
         #     self.rewards[i] += -self.state.turn_number * 0.001
