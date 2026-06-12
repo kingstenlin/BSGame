@@ -31,6 +31,7 @@ rankToCyclicalCos = {r : np.cos(2 * np.pi * rankToInd[r] / 13) / 2 + 0.5
 # [16]: claim quantity, normalized by 4 (0 if no claim)
 # [17]: current phase (0 for DECLARE, 1 for CHALLENGE)
 # Next NUM_PLAYERS: hand sizes, normalized by deck size
+# TODO: this shall now be ordered from perspective of the agent as curr, next, prev
 
 OBS_DIM = 18 + NUM_PLAYERS
 
@@ -284,11 +285,11 @@ class BSEnv(AECEnv):
         # penalize a false challenge (picking up cards)
         # not do anything on pass
         # self.rewards[acting_player] += a[action]
-        if action == 14:
-            self.rewards[acting_player] += 0.001 * (1 - 2 * self.state.last_truth)
+        # if action == 14:
+        #     self.rewards[acting_player] += 0.001 * (1 - 2 * self.state.last_truth)
             # penalized getting bluff called
         # for i in self.agents:
-        #     self.rewards[i] += -self.state.turn_number * 0.001
+             # self.rewards[i] += -((self.state.turn_number // 6) ** 0.5) * 0.00001
         return
 
 
@@ -327,7 +328,9 @@ class BSEnv(AECEnv):
         vectorObs[17] = 0 if (playerObs.phase == GameState.Phase.DECLARE) else 1
 
         for i in range(NUM_PLAYERS):
-            vectorObs[18 + i] = playerObs.hand_sizes[i] / 52 / NUM_DECKS
+            # curr, next, prev
+            relIndex = (self.state.current_player + i) % 3
+            vectorObs[18 + i] = playerObs.hand_sizes[relIndex] / 52 / NUM_DECKS
 
         return vectorObs
 

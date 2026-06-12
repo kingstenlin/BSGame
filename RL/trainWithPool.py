@@ -61,8 +61,8 @@ POOL_MAX_SIZE      = 30    # evict oldest when pool exceeds this
 
 # Seat-assignment probabilities (must sum to 1.0)
 P_CURRENT    = 0.50
-P_CHECKPOINT = 0.20
-P_NAIVE      = 0.30
+P_CHECKPOINT = 0.40
+P_NAIVE      = 0.10
 
 
 # ────────────────────────────────────────────────────────────────────────────
