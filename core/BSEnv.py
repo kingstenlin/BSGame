@@ -320,20 +320,21 @@ class BSEnv(AECEnv):
         for i in range(13):
             # (rankToInd[playerObs.current_rank] - i) will be zero on matching i
             vectorObs[13 + i] = 1 if rankToInd[playerObs.current_rank] == i else 0
-        # goes till 25
-        # vectorObs[13] = rankToCyclicalSin[playerObs.current_rank]
-        # vectorObs[14] = rankToCyclicalCos[playerObs.current_rank]
+        # goes through 25
+        vectorObs[26] = rankToCyclicalSin[playerObs.current_rank]
+        vectorObs[27] = rankToCyclicalCos[playerObs.current_rank]
 
-        vectorObs[26] = playerObs.pile_size / 52 / NUM_DECKS
+        vectorObs[28] = playerObs.pile_size / 52 / NUM_DECKS
 
-        vectorObs[27] = (playerObs.current_claim.quantity / 4) if playerObs.current_claim else 0
+        vectorObs[29] = (playerObs.current_claim.quantity / 4) if playerObs.current_claim else 0
 
-        vectorObs[28] = 0 if (playerObs.phase == GameState.Phase.DECLARE) else 1
+        vectorObs[30] = 0 if (playerObs.phase == GameState.Phase.DECLARE) else 1
+
 
         for i in range(NUM_PLAYERS):
             # curr, next, prev
             relIndex = (self.state.current_player + i) % 3
-            vectorObs[29 + i] = playerObs.hand_sizes[relIndex] / 52 / NUM_DECKS
+            vectorObs[31 + i] = playerObs.hand_sizes[relIndex] / 52 / NUM_DECKS
 
         return vectorObs
 

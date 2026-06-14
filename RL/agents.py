@@ -47,8 +47,8 @@ _ACTION_CHALLENGE = 14
 _ACTION_PASS      = 15
 
 # Observation indices
-_IDX_PILE  = 26
-_IDX_PHASE = 28
+_IDX_PILE  = 28
+_IDX_PHASE = 30
 
 ActResult = Tuple[int, Optional[float], Optional[float]]  # (action, log_prob, value)
 
