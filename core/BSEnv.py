@@ -33,7 +33,7 @@ rankToCyclicalCos = {r : np.cos(2 * np.pi * rankToInd[r] / 13) / 2 + 0.5
 # Next NUM_PLAYERS: hand sizes, normalized by deck size
 # TODO: this shall now be ordered from perspective of the agent as curr, next, prev
 
-OBS_DIM = 18 + NUM_PLAYERS
+OBS_DIM = 29 + NUM_PLAYERS
 
 # Action space:
 # 0 declare 1 card, 0 of which are honest
@@ -102,7 +102,6 @@ class BSEnv(AECEnv):
     # ------------------------------------------------------------------
 
     def reset(self, seed=None, options=None):
-
         if seed is not None:
             self._rng = np.random.default_rng(seed)
         game_seed = int(self._rng.integers(0, 2 ** 31))
@@ -304,10 +303,10 @@ class BSEnv(AECEnv):
         """
         # Observation vector layout:
         # [0:13]: counts of each rank, normalized by 4
-        # [13, 14]: cyclic encoding of current rank
-        # [15]: pile size, normalized by deck size
-        # [16]: claim quantity, normalized by 4 (0 if no claim)
-        # [17]: current phase (0 for DECLARE, 1 for CHALLENGE)
+        # [13:26]: cyclic encoding of current rank
+        # [26]: pile size, normalized by deck size
+        # [27]: claim quantity, normalized by 4 (0 if no claim)
+        # [28]: current phase (0 for DECLARE, 1 for CHALLENGE)
         # Next NUM_PLAYERS: hand sizes, normalized by deck size
 
         vectorObs = np.zeros(OBS_DIM, np.float32)
@@ -318,19 +317,23 @@ class BSEnv(AECEnv):
             vectorObs[rankToInd[card.rank]] += 0.25
 
         # note the transformation to maintain [0, 1]
-        vectorObs[13] = rankToCyclicalSin[playerObs.current_rank]
-        vectorObs[14] = rankToCyclicalCos[playerObs.current_rank]
+        for i in range(13):
+            # (rankToInd[playerObs.current_rank] - i) will be zero on matching i
+            vectorObs[13 + i] = 1 if rankToInd[playerObs.current_rank] == i else 0
+        # goes till 25
+        # vectorObs[13] = rankToCyclicalSin[playerObs.current_rank]
+        # vectorObs[14] = rankToCyclicalCos[playerObs.current_rank]
 
-        vectorObs[15] = playerObs.pile_size / 52 / NUM_DECKS
+        vectorObs[26] = playerObs.pile_size / 52 / NUM_DECKS
 
-        vectorObs[16] = (playerObs.current_claim.quantity / 4) if playerObs.current_claim else 0
+        vectorObs[27] = (playerObs.current_claim.quantity / 4) if playerObs.current_claim else 0
 
-        vectorObs[17] = 0 if (playerObs.phase == GameState.Phase.DECLARE) else 1
+        vectorObs[28] = 0 if (playerObs.phase == GameState.Phase.DECLARE) else 1
 
         for i in range(NUM_PLAYERS):
             # curr, next, prev
             relIndex = (self.state.current_player + i) % 3
-            vectorObs[18 + i] = playerObs.hand_sizes[relIndex] / 52 / NUM_DECKS
+            vectorObs[29 + i] = playerObs.hand_sizes[relIndex] / 52 / NUM_DECKS
 
         return vectorObs
 
