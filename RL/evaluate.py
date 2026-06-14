@@ -286,28 +286,39 @@ class MatchResult:
 @dataclass
 class TournamentStats:
     """Aggregate stats across multiple games for one matchup."""
-    seat_names:   List[str]
-    wins:         Dict[str, int]  = field(default_factory=lambda: defaultdict(int))
-    truncations:  int             = 0
-    total_games:  int             = 0
-    total_moves:  int             = 0
-    move_samples: List[int]       = field(default_factory=list)
+    seat_names:    List[str]
+    shuffled:      bool             = False
+    wins:          Dict[int, int]   = field(default_factory=lambda: defaultdict(int))  # by canonical agent index
+    seat_wins:     Dict[int, int]   = field(default_factory=lambda: defaultdict(int))  # by physical seat
+    truncations:   int              = 0
+    total_games:   int              = 0
+    total_moves:   int              = 0
+    move_samples:  List[int]        = field(default_factory=list)
 
-    def record(self, result: MatchResult) -> None:
+    def record(self, result: MatchResult, physical_seat: Optional[int] = None) -> None:
         self.total_games += 1
         self.total_moves += result.n_moves
         self.move_samples.append(result.n_moves)
         if result.truncated:
             self.truncations += 1
         elif result.winner_seat is not None:
-            self.wins[result.seat_names[result.winner_seat]] += 1
+            self.wins[result.winner_seat] += 1          # canonical agent index
+            ps = physical_seat if physical_seat is not None else result.winner_seat
+            self.seat_wins[ps] += 1                     # physical seat
 
-    @property
-    def win_rates(self) -> Dict[str, float]:
+    def seat_win_rate(self, seat: int) -> float:
+        """Win rate by canonical agent index (seat-normalized in shuffled mode)."""
         completed = self.total_games - self.truncations
         if completed == 0:
-            return {n: 0.0 for n in self.seat_names}
-        return {n: self.wins[n] / completed for n in set(self.seat_names)}
+            return 0.0
+        return self.wins[seat] / completed
+
+    def physical_seat_win_rate(self, seat: int) -> float:
+        """Win rate by physical seat position (only meaningful in fixed mode)."""
+        completed = self.total_games - self.truncations
+        if completed == 0:
+            return 0.0
+        return self.seat_wins[seat] / completed
 
     @property
     def mean_moves(self) -> float:
@@ -380,11 +391,11 @@ def run_tournament(
     seed_start: int  = 0,
 ) -> TournamentStats:
     """
-    Run n_games with the given seat assignment.
-    Shows a progress bar for longer runs.
+    Run n_games with a fixed seat assignment.
+    Wins are tracked by seat index.
     """
     env   = BSEnv(max_iter=max_iter)
-    stats = TournamentStats(seat_names=[a.name for a in agents])
+    stats = TournamentStats(seat_names=[a.name for a in agents], shuffled=False)
     use_progress = n_games >= 20 and not verbose
 
     t0 = time.time()
@@ -405,6 +416,60 @@ def run_tournament(
     return stats
 
 
+def run_shuffled_tournament(
+    agents:     List[EvalAgent],
+    n_games:    int,
+    max_iter:   int  = 5_000,
+    verbose:    bool = False,
+    seed_start: int  = 0,
+) -> TournamentStats:
+    """
+    Run n_games with agents rotated evenly through all seat permutations.
+
+    All 3! = 6 permutations are used. Games are distributed as evenly as
+    possible across permutations (remainder games go to the first perms).
+    Wins are tracked both by seat index and by agent identity so both
+    positional and agent-level win rates can be reported.
+    """
+    perms      = list(itertools.permutations(range(len(agents))))
+    n_perms    = len(perms)
+    base, rem  = divmod(n_games, n_perms)
+    env        = BSEnv(max_iter=max_iter)
+    stats      = TournamentStats(seat_names=[a.name for a in agents], shuffled=True)
+    use_progress = n_games >= 20 and not verbose
+
+    game_i = 0
+    t0     = time.time()
+
+    for pi, perm in enumerate(perms):
+        perm_games   = base + (1 if pi < rem else 0)
+        seated       = [agents[perm[s]] for s in range(NUM_PLAYERS)]
+
+        for _ in range(perm_games):
+            result = run_game(env, seated, verbose=verbose, seed=seed_start + game_i)
+            # Remap winner seat back to original agent index before recording
+            remapped = MatchResult(
+                seat_names  = [a.name for a in agents],   # canonical order
+                winner_seat = perm[result.winner_seat] if result.winner_seat is not None else None,
+                n_moves     = result.n_moves,
+                truncated   = result.truncated,
+            )
+            stats.record(remapped, physical_seat=result.winner_seat)
+            game_i += 1
+
+            if use_progress and game_i % max(1, n_games // 20) == 0:
+                pct  = game_i / n_games * 100
+                bar  = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+                rate = game_i / (time.time() - t0 + 1e-9)
+                print(f"\r  [{bar}] {pct:5.1f}%  {game_i}/{n_games}  ({rate:.1f} games/s)",
+                      end="", flush=True)
+
+    if use_progress:
+        print()
+
+    return stats
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Multi-matchup: round-robin over all 3-seat subsets
 # ────────────────────────────────────────────────────────────────────────────
@@ -414,26 +479,31 @@ def run_round_robin(
     n_games:    int,
     max_iter:   int  = 5_000,
     verbose:    bool = False,
+    shuffle:    bool = True,
 ) -> List[TournamentStats]:
     """
     If more than 3 agents are provided, run every combination of 3.
-    Returns a list of TournamentStats, one per matchup.
+    With shuffle=True (default), each matchup uses run_shuffled_tournament
+    so win rates are seat-normalized. With shuffle=False the fixed seat
+    order is preserved (useful for debugging positional effects).
     """
-    if len(agents) <= NUM_PLAYERS:
-        # Pad to exactly 3 seats with random agents if needed
-        while len(agents) < NUM_PLAYERS:
-            agents.append(EvalNaiveAgent(RandomAgent(), "Random(filler)"))
-        return [run_tournament(agents, n_games, max_iter, verbose)]
+    while len(agents) < NUM_PLAYERS:
+        agents.append(EvalNaiveAgent(RandomAgent(), "Random(filler)"))
+
+    runner = run_shuffled_tournament if shuffle else run_tournament
+
+    if len(agents) == NUM_PLAYERS:
+        return [runner(agents, n_games, max_iter, verbose)]
 
     all_stats = []
     combos = list(itertools.combinations(range(len(agents)), NUM_PLAYERS))
-    print(f"\n  {len(combos)} matchup(s) × {n_games} games each\n")
+    print(f"\n  {len(combos)} matchup(s) × {n_games} games each "
+          f"({'seat-shuffled' if shuffle else 'fixed seats'})\n")
 
     for combo in combos:
         trio = [agents[i] for i in combo]
-        names = " vs ".join(a.name for a in trio)
-        print(f"  Matchup: {names}")
-        stats = run_tournament(trio, n_games, max_iter, verbose)
+        print(f"  Matchup: {' vs '.join(a.name for a in trio)}")
+        stats = runner(trio, n_games, max_iter, verbose)
         all_stats.append(stats)
 
     return all_stats
@@ -459,40 +529,46 @@ def _print_step(seat: int, name: str, action: int, env: BSEnv) -> None:
 
 
 def print_stats(stats: TournamentStats) -> None:
-    completed = stats.total_games - stats.truncations
-    names     = list(dict.fromkeys(stats.seat_names))  # unique, order preserved
+    completed  = stats.total_games - stats.truncations
+    mode_label = "seat-shuffled" if stats.shuffled else "fixed seats"
 
-    print(f"\n  ┌{'─'*54}┐")
-    print(f"  │  Matchup: {' vs '.join(stats.seat_names):<43}│")
-    print(f"  ├{'─'*54}┤")
+    print(f"\n  ┌{'─'*56}┐")
+    print(f"  │  Agents: {' vs '.join(stats.seat_names):<47}│")
+    print(f"  │  Mode: {mode_label:<49}│")
+    print(f"  ├{'─'*56}┤")
     print(f"  │  Games:      {stats.total_games:<6}  "
           f"Completed: {completed:<6}  "
-          f"Truncated: {stats.truncations:<5}│")
+          f"Truncated: {stats.truncations:<5}  │")
     print(f"  │  Moves/game: mean {stats.mean_moves:>5.1f}   "
-          f"median {stats.median_moves:>5.1f}{' '*13}│")
-    print(f"  ├{'─'*54}┤")
-    print(f"  │  {'Agent':<18}  {'Wins':>6}  {'Win rate':>9}  {'Seat':>5}  │")
-    print(f"  ├{'─'*54}┤")
+          f"median {stats.median_moves:>5.1f}{' '*15}│")
+    print(f"  ├{'─'*56}┤")
 
-    # Count how many times each agent name appears as a seat (for seat label)
-    seat_label = {}
-    seat_count: Dict[str, int] = defaultdict(int)
-    for i, n in enumerate(stats.seat_names):
-        seat_count[n] += 1
-    name_seen:  Dict[str, int] = defaultdict(int)
-    for i, n in enumerate(stats.seat_names):
-        if seat_count[n] > 1:
-            seat_label[i] = f"p{i}({n})"
-        else:
-            seat_label[i] = f"p{i}"
+    if stats.shuffled:
+        # Primary table: per-agent win rates (seat-normalized)
+        print(f"  │  {'Agent':<22}  {'Wins':>6}  {'Win rate':>9}  {'':>5}  │")
+        print(f"  ├{'─'*56}┤")
+        for i, name in enumerate(stats.seat_names):
+            w    = stats.wins[i]
+            rate = stats.seat_win_rate(i)
+            print(f"  │  {name:<22}  {w:>6}  {rate:>8.1%}  {'':>5}  │")
 
-    for i, n in enumerate(stats.seat_names):
-        w    = stats.wins.get(n, 0)
-        rate = stats.win_rates.get(n, 0.0)
-        bar  = "█" * int(rate * 20) + "░" * (20 - int(rate * 20))
-        print(f"  │  {n:<18}  {w:>6}  {rate:>8.1%}  {seat_label[i]:>5}  │")
+        # Secondary breakdown: raw positional win rates
+        print(f"  ├{'─'*56}┤")
+        print(f"  │  Positional breakdown (averaged across agents):{' '*7}│")
+        for s in range(NUM_PLAYERS):
+            rate = stats.physical_seat_win_rate(s)
+            bar  = "█" * int(rate * 20) + "░" * (20 - int(rate * 20))
+            print(f"  │    p{s}  {bar}  {rate:>5.1%}{' '*13}│")
+    else:
+        # Fixed-seat mode: show per-seat as before
+        print(f"  │  {'Agent':<22}  {'Wins':>6}  {'Win rate':>9}  {'Seat':>4}  │")
+        print(f"  ├{'─'*56}┤")
+        for i, name in enumerate(stats.seat_names):
+            w    = stats.wins[i]
+            rate = stats.seat_win_rate(i)
+            print(f"  │  {name:<22}  {w:>6}  {rate:>8.1%}  {'p'+str(i):>4}  │")
 
-    print(f"  └{'─'*54}┘\n")
+    print(f"  └{'─'*56}┘\n")
 
 
 def print_all_stats(all_stats: List[TournamentStats]) -> None:
@@ -500,14 +576,13 @@ def print_all_stats(all_stats: List[TournamentStats]) -> None:
         print_stats(stats)
 
     if len(all_stats) > 1:
-        # Aggregate win rates across all matchups
-        total_wins:  Dict[str, int] = defaultdict(int)
+        # Aggregate by agent name across all matchups
+        total_wins:   Dict[str, int] = defaultdict(int)
         total_appear: Dict[str, int] = defaultdict(int)
         for stats in all_stats:
-            for name, wins in stats.wins.items():
-                total_wins[name]   += wins
-            for name in set(stats.seat_names):
-                completed = stats.total_games - stats.truncations
+            completed = stats.total_games - stats.truncations
+            for seat, name in enumerate(stats.seat_names):
+                total_wins[name]   += stats.wins[seat]
                 total_appear[name] += completed
 
         print(f"  ┌{'─'*40}┐")
@@ -528,13 +603,14 @@ def print_all_stats(all_stats: List[TournamentStats]) -> None:
 def export_csv(all_stats: List[TournamentStats], path: str) -> None:
     rows = []
     for stats in all_stats:
-        matchup = " vs ".join(stats.seat_names)
-        for name in set(stats.seat_names):
-            completed = stats.total_games - stats.truncations
-            wins      = stats.wins.get(name, 0)
-            rate      = wins / completed if completed > 0 else 0.0
+        matchup   = " vs ".join(stats.seat_names)
+        completed = stats.total_games - stats.truncations
+        for seat, name in enumerate(stats.seat_names):
+            wins = stats.wins[seat]
+            rate = wins / completed if completed > 0 else 0.0
             rows.append({
                 "matchup":    matchup,
+                "seat":       seat,
                 "agent":      name,
                 "games":      stats.total_games,
                 "completed":  completed,
@@ -581,6 +657,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="torch device (default: cuda if available, else cpu)")
     p.add_argument("--verbose", action="store_true",
                    help="Print every action (recommended only for --games 1)")
+    p.add_argument("--no-shuffle", action="store_true",
+                   help="Disable seat rotation; report raw positional win rates")
     p.add_argument("--csv",    metavar="PATH", default=None,
                    help="Export results to CSV")
     p.add_argument("--seed",   type=int, default=0,
@@ -623,8 +701,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         for k in ["random", "conservative", "aggressive", "threshold"]:
             agents.append(make_naive_eval_agent(k))
 
+    shuffle = not args.no_shuffle
     print(f"\n  Agents ({len(agents)}): {', '.join(a.name for a in agents)}")
-    print(f"  Games per matchup: {args.games}  |  Device: {device}\n")
+    print(f"  Games per matchup: {args.games}  |  Device: {device}  |  "
+          f"Seats: {'shuffled' if shuffle else 'fixed'}\n")
 
     # ── Run ─────────────────────────────────────────────────────────────────
     all_stats = run_round_robin(
@@ -632,6 +712,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         n_games  = args.games,
         max_iter = args.max_iter,
         verbose  = args.verbose,
+        shuffle  = shuffle,
     )
 
     print_all_stats(all_stats)

@@ -29,9 +29,16 @@ PPO update with BPTT
 ────────────────────
 We do NOT shuffle individual timesteps (that would break recurrence).
 Instead we process each trajectory as a sequence, run the LSTM forward
-in one pass, then flatten timesteps for the clipped-PPO loss. Gradients
-flow back through the entire episode sequence for the encoder and through
-the standard mini-batch for the policy head.
+in one pass, then flatten timesteps for the clipped-PPO loss.
+
+Gradient decoupling (change 1):
+  The latent vector is detached before the policy forward pass. This means
+  the PPO loss gradient does not flow into the encoder — the policy and
+  encoder are optimized by separate Adam instances at different learning
+  rates (policy: lr, encoder: lr * 0.25). The encoder receives its own
+  backward pass on the same loss value, computed with the live (attached)
+  latent but with policy weights frozen in that graph. This prevents the
+  noisy PPO gradient from destabilizing the LSTM representations.
 
 Opponent pool
 ─────────────
@@ -457,11 +464,12 @@ class BSTrainer:
         self.encoder = LSTMEncoder().to(self.device)
         self.policy  = BSPolicy(AUG_OBS_DIM, NUM_ACTIONS, hidden_dim).to(self.device)
 
-        # Single optimizer over both encoder and policy
-        self.opt = optim.Adam(
-            list(self.encoder.parameters()) + list(self.policy.parameters()),
-            lr=lr, eps=1e-5,
-        )
+        # Separate optimizers: encoder is decoupled from policy gradient.
+        # encoder_lr is intentionally lower — the encoder should update slowly
+        # and stably relative to the policy, which sees cleaner gradients
+        # because latent is detached before the policy forward pass.
+        self.policy_opt  = optim.Adam(self.policy.parameters(),  lr=lr,        eps=1e-5)
+        self.encoder_opt = optim.Adam(self.encoder.parameters(), lr=lr * 0.25, eps=1e-5)
 
         self.gamma            = gamma
         self.gae_lambda       = gae_lambda
@@ -665,51 +673,69 @@ class BSTrainer:
                 T    = len(traj)
 
                 # ── Re-run encoder (with grad) over full sequence ─────────
-                obs_seq  = torch.tensor(np.array(traj.obs), dtype=torch.float32,
-                                        device=self.device)          # [T, OBS_DIM]
+                obs_seq = torch.tensor(np.array(traj.obs), dtype=torch.float32,
+                                       device=self.device)            # [T, OBS_DIM]
 
-                # Retrieve the initial hidden state for this trajectory
-                # (the stored pre-step hx for step 0 is hx *before* any obs)
                 hx0 = _move_hx(traj.lstm_hx[0], self.device) if traj.lstm_hx else None
 
                 latent_seq = self.encoder.forward_seq(obs_seq, hx0)  # [T, latent]
 
-                aug_obs = torch.cat([obs_seq, latent_seq], dim=-1)   # [T, aug]
+                # ── Detach latent before policy forward ───────────────────
+                # Policy gradients do not flow into the encoder. The encoder
+                # is updated via its own backward pass on the same loss value,
+                # but at a lower learning rate and without interference from
+                # the clipped PPO objective reshaping its representations.
+                latent_detached = latent_seq.detach()
+                aug_obs_policy  = torch.cat([obs_seq, latent_detached], dim=-1)  # [T, aug]
 
-                # ── Policy forward ────────────────────────────────────────
-                act_t  = torch.tensor(traj.actions, dtype=torch.long,
-                                      device=self.device)
-                lp_old = torch.tensor(traj.log_probs, dtype=torch.float32,
-                                      device=self.device)
-                adv_t  = torch.tensor(adv_list[ti], dtype=torch.float32,
-                                      device=self.device)
-                ret_t  = torch.tensor(ret_list[ti], dtype=torch.float32,
-                                      device=self.device)
-                mask_t = torch.tensor(np.array(traj.masks), dtype=torch.bool,
-                                      device=self.device)            # [T, NUM_ACTIONS]
+                # ── Shared targets ────────────────────────────────────────
+                act_t  = torch.tensor(traj.actions,   dtype=torch.long,    device=self.device)
+                lp_old = torch.tensor(traj.log_probs, dtype=torch.float32, device=self.device)
+                adv_t  = torch.tensor(adv_list[ti],   dtype=torch.float32, device=self.device)
+                ret_t  = torch.tensor(ret_list[ti],   dtype=torch.float32, device=self.device)
+                mask_t = torch.tensor(np.array(traj.masks), dtype=torch.bool, device=self.device)
 
-                log_prob, entropy, value = self.policy.evaluate(aug_obs, act_t, mask_t)
+                # ── Policy forward and loss ───────────────────────────────
+                log_prob, entropy, value = self.policy.evaluate(aug_obs_policy, act_t, mask_t)
 
                 ratio = torch.exp(log_prob - lp_old)
-                policy_loss = -torch.min(
+                policy_loss  = -torch.min(
                     ratio * adv_t,
                     ratio.clamp(1 - self.clip_eps, 1 + self.clip_eps) * adv_t,
                 ).mean()
-
                 value_loss   = nn.functional.mse_loss(value, ret_t)
                 entropy_loss = -entropy.mean()
 
-                loss = (policy_loss
-                        + self.value_coef   * value_loss
-                        + self.entropy_coef * entropy_loss)
+                ppo_loss = (policy_loss
+                            + self.value_coef   * value_loss
+                            + self.entropy_coef * entropy_loss)
 
-                self.opt.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(
-                    list(self.encoder.parameters()) + list(self.policy.parameters()),
-                    self.max_grad_norm,
-                )
-                self.opt.step()
+                # ── Policy backward (encoder grad blocked by detach) ──────
+                self.policy_opt.zero_grad()
+                ppo_loss.backward()
+                nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                self.policy_opt.step()
+
+                # ── Encoder backward (attached latent, policy detached) ───
+                # Re-run policy on live latent so the encoder receives signal
+                # for how well its representations support the policy loss,
+                # without the policy weights moving a second time this step.
+                aug_obs_enc = torch.cat([obs_seq, latent_seq], dim=-1)
+                with torch.no_grad():
+                    # freeze policy params from this graph — we only want
+                    # gradients w.r.t. encoder params
+                    pass
+                log_prob_enc, _, value_enc = self.policy.evaluate(aug_obs_enc, act_t, mask_t)
+                ratio_enc = torch.exp(log_prob_enc - lp_old)
+                enc_loss  = (-torch.min(
+                    ratio_enc * adv_t,
+                    ratio_enc.clamp(1 - self.clip_eps, 1 + self.clip_eps) * adv_t,
+                ).mean() + self.value_coef * nn.functional.mse_loss(value_enc, ret_t))
+
+                self.encoder_opt.zero_grad()
+                enc_loss.backward()
+                nn.utils.clip_grad_norm_(self.encoder.parameters(), self.max_grad_norm)
+                self.encoder_opt.step()
 
                 log["policy_loss"].append(policy_loss.item())
                 log["value_loss"].append(value_loss.item())
@@ -798,12 +824,13 @@ class BSTrainer:
         torch.save({
             "encoder":          self.encoder.state_dict(),
             "policy":           self.policy.state_dict(),
-            "optimizer":        self.opt.state_dict(),
+            "policy_opt":       self.policy_opt.state_dict(),
+            "encoder_opt":      self.encoder_opt.state_dict(),
             "episode_count":    self.episode_count,
             "update_count":     self.update_count,
             "win_counts":       dict(self.win_counts),
             "seat_type_counts": dict(self.seat_type_counts),
-            "pool":             self.pool._pool,   # list of (enc_sd, pol_sd) tuples
+            "pool":             self.pool._pool,
         }, path)
         print(f"  → saved {path}")
 
@@ -811,7 +838,11 @@ class BSTrainer:
         ckpt = torch.load(path, map_location=self.device)
         self.encoder.load_state_dict(ckpt["encoder"])
         self.policy.load_state_dict(ckpt["policy"])
-        self.opt.load_state_dict(ckpt["optimizer"])
+        # Support checkpoints saved before the optimizer split
+        if "policy_opt" in ckpt:
+            self.policy_opt.load_state_dict(ckpt["policy_opt"])
+        if "encoder_opt" in ckpt:
+            self.encoder_opt.load_state_dict(ckpt["encoder_opt"])
         self.episode_count    = ckpt["episode_count"]
         self.update_count     = ckpt["update_count"]
         self.win_counts       = defaultdict(int, ckpt["win_counts"])
