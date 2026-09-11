@@ -1,4 +1,4 @@
-from newWeb.server.game_session import GameSession
+from web.server.game_session import GameSession
 
 class GameManager():
     def __init__(self):

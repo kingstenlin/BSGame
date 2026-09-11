@@ -1,7 +1,7 @@
 # TODO: handle disconnect
 
 from fastapi import FastAPI, WebSocket
-from newWeb.server.game_manager import GameManager
+from web.server.game_manager import GameManager
 
 import json
 

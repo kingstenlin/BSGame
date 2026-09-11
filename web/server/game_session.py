@@ -1,6 +1,6 @@
 from core import GameState
 from core.BSEnv import BSEnv
-from newWeb.server.player import Player
+from web.server.player import Player
 
 class GameSession:
     def __init__(self):
