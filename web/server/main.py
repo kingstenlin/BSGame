@@ -1,9 +1,13 @@
+# TODO: handle disconnect
+
 from fastapi import FastAPI, WebSocket
 from newWeb.server.game_manager import GameManager
 
 import json
 
 from core import BSEnv, Action, GameState
+from RL import agents
+from RL.utils import load_policy_agent
 
 #uvicorn newWeb.server.main:app --reload
 app = FastAPI()
@@ -21,6 +25,7 @@ async def health():
 @app.websocket("/ws/{id}")
 async def websocket_endpoint(websocket: WebSocket, id: str):
     await websocket.accept()
+    # create session
     session = manager.get_game(id)
     if session is None:
         session = manager.create_game(id)
@@ -30,6 +35,7 @@ async def websocket_endpoint(websocket: WebSocket, id: str):
 
     playerID = session.add_player(websocket)
 
+
     if playerID is None:
         await websocket.send_json({"type": "error",
                                   "data" : "Full lobby"})
@@ -37,25 +43,39 @@ async def websocket_endpoint(websocket: WebSocket, id: str):
     else:
         await websocket.send_json({"type": "player_assigned",
                                    "data": playerID})
+    # on join, give state
+    playerObs = GameState.observe(session.env.state, playerID)
+    data = {"type": "playerObs",
+            "data": playerObs.toDict()}
+    await websocket.send_json(json.dumps(data))
 
     while True:
-        # give observation to the player
-        playerObs = GameState.observe(session.env.state, playerID)
-        data = {"type": "playerObs",
-                "data": playerObs.toDict()}
-        await websocket.send_json(json.dumps(data))
-
-
         message = await websocket.receive_json()
 
-        # info/debugging
+        # info/debugging ---------------------------------------------------------------
         # const ws = new WebSocket("ws://localhost:8000/ws/test");
         if message["type"] == "debug":
             data = message["data"]
             if data == "getPlayer":
                 await websocket.send_json({"type": "debug",
                                            "data": playerID})
-        # action area
+        # make bots ---------------------------------------------------------------
+
+        # ws.send(JSON.stringify({
+        #     type: "add_bot",
+        #     data: {player_id : 1, agent : "john"}
+        # }));
+
+        if message["type"] == "add_bot":
+            player_id = message["data"]["player_id"]
+            agent_name = message["data"]["agent"]
+            if agent_name == "policy":
+                ag = load_policy_agent("./RL/checkpointsPPO/policy_0100000.pt", "mps")
+            else:
+                ag = agents.RandomAgent()
+            session.add_bot(player_id, ag)
+
+        # action area ---------------------------------------------------------------
 
         # ws.send(JSON.stringify({
         #     type: "action",
@@ -68,10 +88,9 @@ async def websocket_endpoint(websocket: WebSocket, id: str):
             action = message["data"]
             if validActions[action]:
                 session.env.step(action)
-                playerObs = GameState.observe(session.env.state, playerID)
-                data = {"type" : "playerObs",
-                        "data" : playerObs.toDict()}
+                await session.broadcast()
+                await session.process_bot()
             else:
                 data = {"type" : "error",
                         "data" : "Invalid action"}
-            await websocket.send_json(json.dumps(data))
+                await websocket.send_json(data)

@@ -61,6 +61,9 @@ class Card:
     rank: Rank
     suit: Suit
 
+    def toDict(self):
+        return {"rank": self.rank.name, "suit": self.suit.name}
+
 @dataclass(frozen=True, slots=True)
 class PlayerState:
     id: int
@@ -70,10 +73,16 @@ class PlayerState:
     def size(self) -> int:
         return len(self.hand)
 
+    def toDict(self):
+        return {"id": self.id, "hand": self.hand}
+
 @dataclass(frozen=True, slots=True)
 class Claim:
     rank: Rank
     quantity: int
+
+    def toDict(self):
+        return {"rank": self.rank.name, "quantity": self.quantity}
 
 @dataclass(frozen=True, slots=True)
 class GameState:
@@ -160,6 +169,20 @@ class PlayerObservation:
     current_rank: Optional[Rank] = None
 
     historyQueue: tuple[int, ...] = ()
+
+    def toDict(self):
+        return {"player_id": self.player_id,
+                "player_hand":[card.toDict() for card in self.player_hand],
+                "pile_size": self.pile_size,
+                "current_player": self.current_player,
+                "phase": self.phase.name,
+                "last_actor": self.last_actor,
+                "hand_sizes": self.hand_sizes,
+                "turn_number": self.turn_number,
+                "current_claim": self.current_claim.toDict() if self.current_claim else None,
+                "current_rank": self.current_rank.name if self.current_rank else None,
+                "historyQueue": self.historyQueue}
+
 
 def observe(state: GameState, player_id: int) -> PlayerObservation:
     player = state.getPlayerById(player_id)

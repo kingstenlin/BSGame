@@ -1,5 +1,5 @@
 """
-trainWithPool_LSTM.py — PPO + LSTM trainer for BSEnv with opponent pool.
+trainLSTM.py — PPO + LSTM trainer for BSEnv with opponent pool.
 
 Architecture overview
 ─────────────────────
@@ -756,8 +756,16 @@ class BSTrainer:
         log_interval:   int = 200,
         save_interval:  int = 5_000,
         checkpoint_dir: str = "checkpoints_lstm",
+        resume_from:    Optional[str] = None,
     ) -> BSPolicy:
         os.makedirs(checkpoint_dir, exist_ok=True)
+
+        if resume_from is not None:
+            self.load(resume_from)
+            print(f"  Resuming from ep {self.episode_count:,} → target {total_episodes:,}\n")
+            if self.episode_count >= total_episodes:
+                print("  Nothing to do — checkpoint already at or past target.")
+                return self.policy
 
         n_enc = sum(p.numel() for p in self.encoder.parameters())
         n_pol = sum(p.numel() for p in self.policy.parameters())
@@ -766,8 +774,8 @@ class BSTrainer:
               f"latent={LSTM_LATENT_DIM})")
         print(f"Policy params : {n_pol:,}  (aug obs={AUG_OBS_DIM})")
         print(f"Total params  : {n_enc + n_pol:,}")
-        print(f"Target        : {total_episodes:,} episodes, "
-              f"update every {self.episodes_per_update}")
+        print(f"Progress      : ep {self.episode_count:,} → {total_episodes:,}")
+        print(f"Update every  : {self.episodes_per_update} episodes")
         print(f"Pool          : max {POOL_MAX_SIZE} snapshots, "
               f"snapshot every {self.pool_add_interval} updates")
         print(f"Seat dist     : {P_CURRENT:.0%} current / "
@@ -870,9 +878,21 @@ def _move_hx(
 # ────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import argparse as _ap
+    _p = _ap.ArgumentParser(description="Train PPO+LSTM agent for BSEnv")
+    _p.add_argument("--total-episodes", type=int, default=100_000)
+    _p.add_argument("--resume",         type=str, default=None,
+                    help="Path to checkpoint to resume from")
+    _p.add_argument("--checkpoint-dir", type=str, default="checkpoints_lstm")
+    _p.add_argument("--save-interval",  type=int, default=5_000)
+    _p.add_argument("--log-interval",   type=int, default=200)
+    _p.add_argument("--lr",             type=float, default=3e-4)
+    _p.add_argument("--episodes-per-update", type=int, default=32)
+    _a = _p.parse_args()
+
     trainer = BSTrainer(
         hidden_dim          = 128,
-        lr                  = 3e-4,
+        lr                  = _a.lr,
         gamma               = 0.99,
         gae_lambda          = 0.95,
         clip_eps            = 0.2,
@@ -881,12 +901,14 @@ if __name__ == "__main__":
         max_grad_norm       = 0.5,
         n_epochs            = 4,
         batch_size          = 256,
-        episodes_per_update = 32,
+        episodes_per_update = _a.episodes_per_update,
         max_iter            = 100_000,
         pool_add_interval   = 10,
     )
     trainer.train(
-        total_episodes = 100_000,
-        log_interval   = 200,
-        save_interval  = 5_000,
+        total_episodes = _a.total_episodes,
+        log_interval   = _a.log_interval,
+        save_interval  = _a.save_interval,
+        checkpoint_dir = _a.checkpoint_dir,
+        resume_from    = _a.resume,
     )

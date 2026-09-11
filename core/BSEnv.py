@@ -31,9 +31,9 @@ rankToCyclicalCos = {r : np.cos(2 * np.pi * rankToInd[r] / 13) / 2 + 0.5
 # [16]: claim quantity, normalized by 4 (0 if no claim)
 # [17]: current phase (0 for DECLARE, 1 for CHALLENGE)
 # Next NUM_PLAYERS: hand sizes, normalized by deck size
-# TODO: this shall now be ordered from perspective of the agent as curr, next, prev
 
-OBS_DIM = 29 + NUM_PLAYERS
+
+OBS_DIM = 31 + NUM_PLAYERS
 
 # Action space:
 # 0 declare 1 card, 0 of which are honest
@@ -303,10 +303,11 @@ class BSEnv(AECEnv):
         """
         # Observation vector layout:
         # [0:13]: counts of each rank, normalized by 4
-        # [13:26]: cyclic encoding of current rank
-        # [26]: pile size, normalized by deck size
-        # [27]: claim quantity, normalized by 4 (0 if no claim)
-        # [28]: current phase (0 for DECLARE, 1 for CHALLENGE)
+        # [13:26]: onehot encoding of current rank
+        # [26:28]: cyclic encoding
+        # [28]: pile size, normalized by deck size
+        # [29]: claim quantity, normalized by 4 (0 if no claim)
+        # [30]: current phase (0 for DECLARE, 1 for CHALLENGE)
         # Next NUM_PLAYERS: hand sizes, normalized by deck size
 
         vectorObs = np.zeros(OBS_DIM, np.float32)

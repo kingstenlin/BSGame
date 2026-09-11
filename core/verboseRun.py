@@ -28,19 +28,16 @@ for agent in env.agent_iter():
                 handString += (indToString[i] * int(observation[i] * 4))
         print(f"Hand of length {len(handString)}: {", ".join(handString)}")
 
-        print(f"Current pile size: {int(np.round(observation[15] * 52))}")
+        print(f"Current pile size: {int(np.round(observation[26] * 52))}")
 
         # decode the rank to play from the cyclic encoding
-        a = observation[13]
-        b = observation[14]
-        if a > 0:
-            rankInd = int(np.round(13 * np.arccos(2 * (b - 0.5)) / 2 / np.pi))
-        else:
-            rankInd = 13 - int(np.round(13 * np.arccos(2 * (b - 0.5)) / 2 / np.pi))
+        for i in range(13):
+            if observation[13 + i] != 0:
+                rankInd = i
 
         if actionSpace[14] != 0:
             # declare specifics
-            print(f"Previous claim: {int(np.round(observation[16] * 4))} copies of {indToString[rankInd]}")
+            print(f"Previous claim: {int(np.round(observation[27] * 4))} copies of {indToString[rankInd]}")
         else:
            # play specifics
             print(f"Rank to play: {indToString[rankInd]}")
