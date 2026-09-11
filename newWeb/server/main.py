@@ -47,6 +47,21 @@ async def websocket_endpoint(websocket: WebSocket, id: str):
 
 
         message = await websocket.receive_json()
+
+        # info/debugging
+        # const ws = new WebSocket("ws://localhost:8000/ws/test");
+        if message["type"] == "debug":
+            data = message["data"]
+            if data == "getPlayer":
+                await websocket.send_json({"type": "debug",
+                                           "data": playerID})
+        # action area
+
+        # ws.send(JSON.stringify({
+        #     type: "action",
+        #     data: 2
+        # }));
+
         if message["type"] == "action":
             validActions = session.env._get_action_mask(playerID)
 
