@@ -69,9 +69,11 @@ directly in a browser (double-click it, or `open bs_client.html`).
    connect to the same table id to fill the other seats — or use **Add
    bot** in the "Table management & debug" panel to seat a bot instead of
    a person.
+5. As of 9/11/26, this program cannot yet handle disconnects
 
 To play against a bot solo: connect once, add a bot for each of the other
-two seats, and play.
+two seats, and play. Currently, adding a "policy" bot is hardcoded to use the best policy model currently available,
+and anything else creates a RandomAgent.
 
 ## Playing a turn
 
